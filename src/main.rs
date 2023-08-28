@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{exit, Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,9 +15,9 @@ use tokio::time::sleep;
 
 const QDRANT_BIN: &str = "/home/timvisee/git/qdrant/target/perf/qdrant";
 const BFB_BIN: &str = "bfb";
-// const BFB_PARAMS: &str = "--segments 2 --on-disk-vectors true --on-disk-hnsw --on-disk-payload";
+const BFB_PARAMS: &str = "--segments 2 --on-disk-vectors true --on-disk-hnsw --on-disk-payload";
 // const BFB_PARAMS: &str = "--segments 2";
-const BFB_PARAMS: &str = "";
+// const BFB_PARAMS: &str = "";
 const HOST: &str = "http://localhost:6334";
 const COLLECTION: &str = "test";
 const COLLECTIONS_DIR: &str = "./storage/collections";
@@ -36,8 +36,13 @@ async fn main() -> Result<()> {
 
     prepare(&client).await;
     setup(client.clone()).await;
-    test(&client).await;
-    cleanup();
+    let ok = test(&client).await;
+
+    if ok {
+        cleanup();
+    } else {
+        exit(1);
+    }
 
     Ok(())
 }
@@ -147,7 +152,7 @@ async fn setup(client: Arc<QdrantClient>) {
 /// - checks if all points exist
 /// - checks if all points contain vector data
 /// - checks if all points contain vector payload
-async fn test(client: &QdrantClient) {
+async fn test(client: &QdrantClient) -> bool {
     // Test all points
     let (mut no_points, mut no_vectors, mut no_payload) = (vec![], vec![], vec![]);
     for batch_id in (0..N).step_by(BATCH_SIZE) {
@@ -188,10 +193,7 @@ async fn test(client: &QdrantClient) {
     let vector_ranges = numbers_to_consecutive_ranges(no_vectors.clone());
     let payload_ranges = numbers_to_consecutive_ranges(no_payload.clone());
 
-    // if no_points.is_empty() && no_vectors.is_empty() && payload_ranges.len() <= 1 {
-    //     println!("No missing points, vectors or payload");
-    //     return;
-    // }
+    let ok = no_points.is_empty() && no_vectors.is_empty() && payload_ranges.len() <= 1;
 
     println!("\n========================================\n");
 
@@ -214,6 +216,8 @@ async fn test(client: &QdrantClient) {
     for range in payload_ranges {
         println!("- {:?}: {} payloads", &range, range.clone().count());
     }
+
+    ok
 }
 
 fn cleanup() {

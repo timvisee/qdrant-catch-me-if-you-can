@@ -24,12 +24,11 @@ const COLLECTIONS_DIR: &str = "./storage/collections";
 const N: usize = 100_000;
 const INDEX_THRESHOLD: usize = N / 100;
 const BATCH_SIZE: usize = 100;
-const JOB_SECONDS: u64 = 10;
+const JOB_SECONDS: u64 = 7;
 const JOB_COUNT: usize = 20;
-const JOB_ROUNDS: usize = 10;
-
 const USE_BACKUP: bool = true;
 const BACKUP_COLLECTION: &str = "test-backup";
+const QUIT_ON_FINISH: bool = true;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,6 +37,7 @@ async fn main() -> Result<()> {
     prepare(&client).await;
     setup(client.clone()).await;
     test(&client).await;
+    cleanup();
 
     Ok(())
 }
@@ -62,15 +62,19 @@ async fn use_backup(client: &QdrantClient) -> Child {
     ));
 
     // Start Qdrant
-    let qdrant_handle = spawn(QDRANT_BIN);
-    wait_qdrant_ready(&client).await;
+    let qdrant_handle = spawn(format!(
+        "QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=0 {QDRANT_BIN}"
+    ));
+    wait_qdrant_ready(client).await;
 
     qdrant_handle
 }
 
 async fn build_new(client: &QdrantClient) -> Child {
     // Start Qdrant
-    let mut qdrant_handle = spawn(QDRANT_BIN);
+    let mut qdrant_handle = spawn(format!(
+        "QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=0 {QDRANT_BIN}"
+    ));
     wait_qdrant_ready(client).await;
 
     // Insert base data
@@ -212,6 +216,18 @@ async fn test(client: &QdrantClient) {
     }
 }
 
+fn cleanup() {
+    if QUIT_ON_FINISH {
+        println!("\n========================================\n");
+
+        let qdrant_bin = Path::new(QDRANT_BIN).file_name().unwrap().to_str().unwrap();
+
+        // Kill running Qdrant
+        system(format!("pkill -x {qdrant_bin}"));
+        system(format!("pidwait -x {qdrant_bin}"));
+    }
+}
+
 async fn wait_qdrant_ready(client: &QdrantClient) {
     while client.list_collections().await.is_err() {
         sleep(Duration::from_secs(1)).await;
@@ -241,7 +257,7 @@ fn spawn(cmd: impl AsRef<str>) -> Child {
 }
 
 async fn set_random_payload(client: Arc<QdrantClient>) {
-    for _ in 0..JOB_ROUNDS {
+    loop {
         for batch_id in (0..N).step_by(BATCH_SIZE) {
             let ids = batch_id..batch_id + BATCH_SIZE;
             let point_ids = ids
@@ -253,16 +269,21 @@ async fn set_random_payload(client: Arc<QdrantClient>) {
                     ids: point_ids,
                 })),
             };
-            let payload = HashMap::from([("dummy", true.into())]).into();
+
+            // let payload = HashMap::from([("dummy", "content".into())]).into();
+            let payload = HashMap::new().into();
             let result = client.set_payload(COLLECTION, &points, payload, None).await;
+
+            // let result = client.clear_payload(COLLECTION, Some(points), None).await;
+
+            // let payload = HashMap::new().into();
+            // let result = client.update_vectors(COLLECTION, &points, payload, None).await;
 
             if let Err(err) = result {
                 eprintln!("Set random payload error: {err}");
             }
         }
     }
-
-    unreachable!("Should never reach this in this test")
 }
 
 /// Check if vectors object contains any vector data.
